@@ -3,8 +3,10 @@
 /******************************/
 
 #include "common.h"
+#include <stdlib.h>
+#include <pthread.h>
 
-void ScanValue(u8* message, u32* value, u8* format, u64 max) {
+static void ScanValue(u8* message, u32* value, u8* format, u64 max) {
 	/* General purpose safe scan. Instruction message, value to change, string format and max value */
 	do {
 		printf("%s", message);
@@ -26,7 +28,7 @@ void ScanValue(u8* message, u32* value, u8* format, u64 max) {
 	} while (*value > max);
 }
 
-void CreateProfile(User* user) {
+static void CreateProfile(User* user) {
 	/* Scan for user info and ask if you want to save this new profile */
 	u32 save_profile;
 	ScanValue("Enter your Version (0=Diamond, 1=Pearl, 2=Platinum): ", &user->version, "%u", 2);
@@ -46,22 +48,22 @@ void CreateProfile(User* user) {
 	}
 }
 
-u8 GetNatureId(u32 pid) {
+static u8 GetNatureId(u32 pid) {
 	/* Get the ID of the Nature (from 0 to 24), provided the PID. */
 	return pid % NATURES_MAX;
 }
 
-u8 GetFormId(u8 form) {
+static u8 GetFormId(u8 form) {
 	/* Get the form ID from the form byte */
 	return form >> 3;
 }
 
-u8 BlockOrder(u32 pid) {
+static u8 BlockOrder(u32 pid) {
 	/* Get the index of the block permutation of a given PID (from 0 to 23) */
 	return ((pid & 0x3E000) >> 13) % BLOCK_PERMS;
 }
 
-void SetBlocks(Pkmn* pkmn) {
+static void SetBlocks(Pkmn* pkmn) {
 	/* Get the order of each block from the PID and set them in the correct permutation */
 	/* r/iamverysmart */
 	pkmn->order = BlockOrder(pkmn->pid);
@@ -71,50 +73,50 @@ void SetBlocks(Pkmn* pkmn) {
 	pkmn->pos_d = Perms[pkmn->order] & 0x000f;
 }
 
-u16 StatNatureModifier(u8 nature, u8 stat_index, u16 stat_value) {
+static u16 StatNatureModifier(u8 nature, u8 stat_index, u16 stat_value) {
 	/* Return the new value of a stat after the Nature modifier is applied.*/
 	return stat_value * (10 + NatureStatModifiers[nature][stat_index]) / 10;
 }
 
-u16 IvToStat_HP(Pkmn* pkmn, Original* wild) {
+static u16 IvToStat_HP(Pkmn* pkmn, Original* wild) {
 	/* Return the value of the HP stat based on the IV, Base Stat and Level. */
 	return (2 * (wild->bstats[hp]) + pkmn->ivs[hp]) * wild->level / 100 + wild->level + 10;
 }
 
-u16 IvToStat(Pkmn* pkmn, Original* wild, u8 stat) {
+static u16 IvToStat(Pkmn* pkmn, Original* wild, u8 stat) {
 	/* Return the value of a stat based on the IV, Base Stat, Nature and Level. */
 	/* HP (index 0) is ignored, hence why "stat - 1" is passed as the stat_index */
 	return StatNatureModifier(pkmn->nature, stat - 1, (2 * (wild->bstats[stat]) + pkmn->ivs[stat]) * wild->level / 100 + 5);
 }
 
-void SetCheckum(Pkmn* pkmn) {
+static void SetCheckum(Pkmn* pkmn) {
 	/* Set the checksum of a Pkmn by summing all of its Block data. */
 	for (u8 i = 0; i < BLOCK_SIZE; i++) {
 		pkmn->checksum += pkmn->data[pkmn->pos_a][i] + pkmn->data[pkmn->pos_b][i] + pkmn->data[pkmn->pos_c][i] + pkmn->data[pkmn->pos_d][i];
 	}
 }
 
-bool IsEgg(u16 egg) {
+static bool IsEgg(u16 egg) {
 	/* Check if the egg flag is set by looking at bit 30 of the "iv2" 16-bit word. */
 	return (egg & 0x4000) == 0x4000;
 }
 
-bool IsFatefulEncounter(u16 fate) {
+static bool IsFatefulEncounter(u16 fate) {
 	/* Check if the fateful encounter bit is set. */
 	return fate & 1;
 }
 
-bool IsShiny(u32 pid, u16 tid, u16 sid) {
+static bool IsShiny(u32 pid, u16 tid, u16 sid) {
 	/* Check if a Pkmn is shiny by XORing its PID (top and bottom 16 bits), TID and SID */
 	return ((pid & 0xffff) ^ (pid >> 16) ^ tid ^ sid) < 8;
 }
 
-bool IsInvalidPartyCount(u32 count) {
+static bool IsInvalidPartyCount(u32 count) {
 	/* Check if the number of members in the opponent's party is invalid. Determines crash at battle menu. */
 	return ((count > 0x00000036) && (count < 0x80000000));
 }
 
-void SetString(u8* dest, u16 val, u8 array[][STRING_LENGTH_MAX], u16 max, u8* zero, u8* format) {
+static void SetString(u8* dest, u16 val, u8 array[][STRING_LENGTH_MAX], u16 max, u8* zero, u8* format) {
 	/* Set dest string accoring to val */
 	//If val is greater than the length of array, format it and copy the new buffer string into dest string
 	if (val >= max) {
@@ -133,13 +135,22 @@ void SetString(u8* dest, u16 val, u8 array[][STRING_LENGTH_MAX], u16 max, u8* ze
 	return;
 }
 
-u32 RngNext(u32* state) {
+static u32 RngNext(u32* state) {
 	/* General purpose LCRNG, advance and return state */
 	*state = *state * 0x41C64E6D + 0x6073;
 	return *state;
 }
 
-void EncryptBlocks(Pkmn* pkmn) {
+static u32 RngAdvanceN(u32* state, u32 n) {
+	/* Advance RNG n times and return state */
+	u32 rng = *state;
+	for (u32 i = 0; i < n; i++) {
+		rng = rng * 0x41C64E6D + 0x6073;
+	}
+	return rng;
+}
+
+static void EncryptBlocks(Pkmn* pkmn) {
 	/* LCRNG is seeded with the Checksum */
 	/* Advance the LCRNG, XOR its 16 most significant bits with each 16-bit word of ABCD Block data */
 	u32 state = pkmn->checksum;
@@ -149,7 +160,7 @@ void EncryptBlocks(Pkmn* pkmn) {
 	}
 }
 
-void EncryptCondition(Pkmn* pkmn) {
+static void EncryptCondition(Pkmn* pkmn) {
 	/* LCRNG is seeded with the PID */
 	/* Advance the LCRNG, XOR its 16 most significant bits with each 16-bit word of Condition data */
 	/* It is not needed to encrypt the whole 50 16-bit words of Condition data, I stop at 33 to include the Fateful encounter flag */
@@ -159,7 +170,7 @@ void EncryptCondition(Pkmn* pkmn) {
 	}
 }
 
-void GetIVs(Pkmn* pkmn) {
+static void GetIVs(Pkmn* pkmn) {
 	/* Decompose IVs */
 	pkmn->ivs[hp] = pkmn->iv1 & 31;
 	pkmn->ivs[at] = (pkmn->iv1 >> 5) & 31;
@@ -169,7 +180,7 @@ void GetIVs(Pkmn* pkmn) {
 	pkmn->ivs[sd] = (pkmn->iv2 >> 10) & 31;
 }
 
-void MethodJSeedToPID(u32 state, Pkmn* pkmn) {
+static void MethodJSeedToPID(u32 state, Pkmn* pkmn) {
 	/* Calculate PID, Nature and IVs according to Method J Stationary (no Synchronize) from a given state */
 	pkmn->nature = (RngNext(&state) >> 16) / 0x0A3E;
 	do { pkmn->pid = (RngNext(&state) >> 16) | (RngNext(&state) & 0xffff0000); } while (pkmn->pid % NATURES_MAX != pkmn->nature); //roll PID until the 2 natures are the same
@@ -179,7 +190,7 @@ void MethodJSeedToPID(u32 state, Pkmn* pkmn) {
 	pkmn->iv2 >>= 1;
 }
 
-void DebugPkmnData(Pkmn* pkmn) {
+static void DebugPkmnData(Pkmn* pkmn) {
 	/* Prints out the raw data of a Pkmn */
 #ifdef DEBUG
 	printf("PID: %08X\n", pkmn->pid);
@@ -192,6 +203,222 @@ void DebugPkmnData(Pkmn* pkmn) {
 	}
 	printf("\n");
 #endif
+}
+
+typedef struct {
+	u32 startFrame;
+	u32 endFrame;
+	u32 seed;
+	User* user;
+	Original* ogwild;
+	u16 w_version;
+	u16 w_language;
+	u8 grouped_version;
+	u8 alternate_form;
+	u32 results;
+	char* retBuf;
+	size_t retSz;
+} SearchParams_t;
+
+/* Main search loop */
+static void* Search(void* arg) {
+	size_t bufSz = 100000; // 100 KB, expand if needed
+	char* bufBegin = malloc(bufSz);
+	char* buf = bufBegin;
+	SearchParams_t* searchParams = arg;
+	u32 pid_list[PIDS_MAX] = { 0 };
+	for (u32 frame = searchParams->startFrame; frame < searchParams->endFrame; frame++) {
+
+		if (frame != searchParams->startFrame) { RngNext(&searchParams->seed); } //advance the RNG everytime, except on the 0th frame
+
+		Pkmn wild = { 0 }; //0 init
+		Pkmn seven = { 0 }; //0 init
+
+		MethodJSeedToPID(searchParams->seed, &wild);
+
+		/* Checking for duplicate PIDs if user specified it */
+		if (searchParams->user->dupe == 0) {
+			bool duplicate = false;
+			for (u16 i = 0; i < PIDS_MAX; i++) {
+				if (pid_list[i] == wild.pid) {
+					duplicate = true;
+					break;
+				}
+				else if (pid_list[i] == 0) {
+					pid_list[i] = wild.pid; //insert the new pid
+					break;
+				}
+			}
+			if (frame % PIDS_MAX == PIDS_MAX - 1) { memset(pid_list, 0, sizeof(pid_list)); } //if filled, zero it out
+			if (duplicate) { continue; }
+		}
+
+		SetBlocks(&wild);
+
+		/* Block A */
+		wild.data[wild.pos_a][0] = searchParams->ogwild->species; //species
+		wild.data[wild.pos_a][1] = searchParams->ogwild->item; //held item
+		wild.data[wild.pos_a][2] = searchParams->user->tid; //tid
+		wild.data[wild.pos_a][3] = searchParams->user->sid; //sid
+		wild.data[wild.pos_a][4] = searchParams->ogwild->xp1; //xp1
+		wild.data[wild.pos_a][5] = searchParams->ogwild->xp2; //xp2
+		wild.data[wild.pos_a][6] = searchParams->ogwild->frab; //ability and friendship concatenated
+		wild.data[wild.pos_a][7] = searchParams->w_language; //language
+		/* Block B */
+		for (u8 i = 0; i < OWN_MOVES_MAX; i++) { wild.data[wild.pos_b][i] = searchParams->ogwild->moves[i]; }//4 moves
+		wild.data[wild.pos_b][4] = searchParams->ogwild->pp1and2; //pp1and2
+		wild.data[wild.pos_b][5] = searchParams->ogwild->pp3and4; //pp3and4
+		wild.data[wild.pos_b][8] = wild.iv1;
+		wild.data[wild.pos_b][9] = wild.iv2;
+		wild.data[wild.pos_b][12] = 0x0004 | searchParams->alternate_form; //0x0004 for genderless
+		/* Block C */
+		for (u8 i = 0; i < 11; i++) { wild.data[wild.pos_c][i] = searchParams->ogwild->name[i]; } //11 characters for the name
+		wild.data[wild.pos_c][11] = searchParams->w_version; //version
+		/* Block D */
+		wild.data[wild.pos_d][13] = 0x0400; //pokeball
+		wild.data[wild.pos_d][14] = searchParams->ogwild->level; //level
+		/* Condition data */
+		wild.cond[2] = searchParams->ogwild->level; //level again
+		wild.cond[3] = IvToStat_HP(&wild, searchParams->ogwild);
+		wild.cond[4] = wild.cond[3]; //current hp = max hp
+		wild.cond[5] = IvToStat(&wild, searchParams->ogwild, at);
+		wild.cond[6] = IvToStat(&wild, searchParams->ogwild, df);
+		wild.cond[7] = IvToStat(&wild, searchParams->ogwild, sp);
+		wild.cond[8] = IvToStat(&wild, searchParams->ogwild, sa);
+		wild.cond[9] = IvToStat(&wild, searchParams->ogwild, sd);
+		// wild.cond[10] = 0;
+		// wild.cond[11] = 0;
+		wild.cond[12] = searchParams->w_language; //language again
+		wild.cond[13] = 0xff00 | (searchParams->w_version >> 8); //version variation
+		for (u8 i = 14; i < 25; i++) { wild.cond[i] = 0xffff; } //14 to 24 = 0xffff
+		// wild.cond[25] = 0;
+		wild.cond[26] = 0xffff;
+		// wild.cond[27] = 0;
+		wild.cond[28] = 0xffff;
+		wild.cond[29] = 0xffff;
+
+		SetCheckum(&wild);
+		EncryptBlocks(&wild);
+		EncryptCondition(&wild);
+
+		/* Initialize Seven */
+		seven.pid = 0x00005544;
+		seven.bef = 0x05a4; //after checksum check, changed to a Bad Egg (bit 4: 0->1)
+		SetBlocks(&seven); //always ACBD (0x0213)
+
+		/* Simulate the buffer overflow */
+		/* Block A */
+		seven.data[seven.pos_a][0] = (searchParams->user->aslr + OppPartyOffBeg[searchParams->grouped_version]) & 0xffff;
+		seven.data[seven.pos_a][1] = (searchParams->user->aslr + OppPartyOffBeg[searchParams->grouped_version]) >> 16;
+		seven.data[seven.pos_a][2] = (searchParams->user->aslr + OppPartyOffEnd[searchParams->grouped_version]) & 0xffff;
+		seven.data[seven.pos_a][3] = (searchParams->user->aslr + OppPartyOffEnd[searchParams->grouped_version]) >> 16;
+		for (u8 i = 0; i < 8; i++) { seven.data[seven.pos_a][i + 4] = searchParams->ogwild->gfx[i]; }
+		seven.data[seven.pos_a][12] = 0x0006;
+		seven.data[seven.pos_a][13] = 0x0000;
+		seven.data[seven.pos_a][14] = 0x0001;
+		seven.data[seven.pos_a][15] = 0x0000;
+		/* Block C, B, D and Condition data - array out of bounds method */
+		u16* wild_data = (u16*)(&wild.pid);
+		u16* seven_data = (u16*)(&seven.data[1]);
+		for (u8 i = 0; i < (BLOCKS - 1) * BLOCK_SIZE + COND_SIZE_S + STACK_OFFSET; i++) { seven_data[i] = wild_data[i]; }
+
+		EncryptBlocks(&seven);
+
+		/* If the 1st move of Seven is invalid, the game will crash right before showing the battle menu */
+		if (seven.data[seven.pos_b][0] > MOVES_MAX + 2) { continue; }
+
+		/* If the ball doesn't have a valid ID the battle won't load */
+		u8 ballid = seven.data[seven.pos_d][13] >> 8;
+		if (ballid > BALL_ID_MAX) { continue; }
+
+		SetCheckum(&seven);
+		EncryptBlocks(&seven);
+
+		/* If heap ID of Opponent 1 Party is valid, the game will crash when returning to the overworld */
+		u8 heapid = seven.data[seven.pos_a][10] & 0xff;
+		if (heapid < HEAPID_MAX) { continue; }
+
+		/* If partycount of Opponent 1 Party is invalid, the game will crash right before showing the battle menu */
+		u32 partycount = seven.data[seven.pos_a][14] | (seven.data[seven.pos_a][15] << 16);
+		if (IsInvalidPartyCount(partycount)) { continue; }
+
+		/* If the Bad Egg flag is set or the Fast Mode flags aren't set, the Pkmn will become a Bad Egg */
+		if ((seven.data[seven.pos_c][2] & 7) != 3) { continue; }
+
+		/* Get the new PID of the wild and deduce its new block order */
+		wild.pid = seven.data[seven.pos_c][0] | (seven.data[seven.pos_c][1] << 16);
+		SetBlocks(&wild);
+
+		/* Get final species, item, ability and steps to hatch - array out of bounds method */
+		u16 f_species = seven.data[1 + wild.pos_a][STACK_OFFSET];
+		u16 f_item = seven.data[1 + wild.pos_a][STACK_OFFSET + 1];
+		u16 f_steps = seven.data[1 + wild.pos_a][STACK_OFFSET + 6] & 0xff;
+		u8 f_ability = seven.data[1 + wild.pos_a][STACK_OFFSET + 6] >> 8;
+
+		/* Valid species, user-defined species and user-defined item filters */
+		if (f_species >= SPECIES_MAX) { continue; }
+		if (searchParams->user->species != 0 && f_species != searchParams->user->species) { continue; }
+		if (searchParams->user->item != 0 && f_item != searchParams->user->item) { continue; }
+
+		/* Get final moveset, IVs, Egg steps, Form ID and Fateful Encounter flag - array out of bounds method */
+		u16 moves[OWN_MOVES_MAX];
+		for (u8 i = 0; i < OWN_MOVES_MAX; i++) { moves[i] = seven.data[1 + wild.pos_b][STACK_OFFSET + i]; }
+		wild.iv1 = seven.data[1 + wild.pos_b][STACK_OFFSET + 8];
+		wild.iv2 = seven.data[1 + wild.pos_b][STACK_OFFSET + 9];
+		u16 fate = seven.data[3 + wild.pos_b][0]; //if (wild.pos_b==3) then fate = seven.cond[COND_SIZE_S-1]
+		
+		/* Move filter */
+		if (searchParams->user->move != 0) {
+			/* If none of the 4 current ones match the user's move, continue search */
+			if ((moves[0] != searchParams->user->move) && (moves[1] != searchParams->user->move) && (moves[2] != searchParams->user->move) && (moves[3] != searchParams->user->move)) { continue; }
+		}
+
+		/* IVs, steps to hatch, level, form ID */
+		GetIVs(&wild);
+		f_steps = IsEgg(wild.iv2) * (f_steps + 1) * 255; //steps to hatch if Egg, else zero (0)
+		u8 f_level = seven.cond[22] & 0xff;
+		u8 form = GetFormId((u8)fate);
+
+		/* Strings for a succesful result */
+		u8* str_fateful;
+		if (IsFatefulEncounter(fate)) { str_fateful = "Fateful"; }
+		else { str_fateful = "-------"; }
+		u8* str_shiny;
+		if (IsShiny(wild.pid, searchParams->user->tid, searchParams->user->sid)) { str_shiny = "Shiny"; }
+		else { str_shiny = "-----"; }
+		u8 str_f_species[STRING_LENGTH_MAX];
+		SetString(str_f_species, f_species, Pokelist, SPECIES_MAX, "DPbox", "0x%04X");
+		u8 str_f_item[STRING_LENGTH_MAX];
+		SetString(str_f_item, f_item, Items, ITEMS_MAX, "None", "0x%04X");
+		u8 str_f_abi[STRING_LENGTH_MAX];
+		SetString(str_f_abi, f_ability, Abilities, ABILITIES_MAX, "None", "0x%02X");
+		u8 str_moves[OWN_MOVES_MAX][STRING_LENGTH_MAX];
+		for (u8 i = 0; i < OWN_MOVES_MAX; i++) { SetString(str_moves[i], moves[i], Moves, MOVES_MAX, "None", "0x%04X"); }
+
+		if ((buf + 1000) > (bufBegin + bufSz)) {
+			bufSz <<= 1;
+			u32 bufLoc = buf - bufBegin;
+			bufBegin = realloc(bufBegin, bufSz);
+			if (bufBegin == NULL) {
+				puts("out of memory?");
+				fflush(stdout);
+				exit(EXIT_FAILURE);
+			}
+			buf = bufBegin + bufLoc;
+		}
+
+		/* Print successful result to buffer */
+		buf += sprintf(buf, "0x%08X | 0x%08X | Lv. %-3d | %-12s | %-4d | %-14s | %-16s | %-5d steps | %s | %s | ", searchParams->seed, wild.pid, f_level, str_f_species, form, str_f_item, str_f_abi, f_steps, str_fateful, str_shiny);
+		buf += sprintf(buf, "%02d/%02d/%02d/%02d/%02d/%02d | ", wild.ivs[hp], wild.ivs[at], wild.ivs[df], wild.ivs[sa], wild.ivs[sd], wild.ivs[sp]);
+		buf += sprintf(buf, "%s, %s, %s, %s\n", str_moves[0], str_moves[1], str_moves[2], str_moves[3]);
+
+		++searchParams->results;
+	}
+
+	searchParams->retBuf = bufBegin;
+	searchParams->retSz = buf - bufBegin;
+
+	return NULL;
 }
 
 /**************************************************************/
@@ -300,7 +527,6 @@ int main() {
 	printf("--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n");
 #endif
 
-	u32 pid_list[PIDS_MAX] = { 0 };
 	u32 results = 0;
 	u32 seed = user.seed; //copy to advance in the main loop
 	if (user.language == 8) { user.aslr += KOREAN_OFFSET; } //RAM thing
@@ -309,190 +535,51 @@ int main() {
 
 	clock_t begin = clock(); //timer starts
 
-	/* Main search loop */
-	for (u32 frame = 0; frame < user.frames; frame++) {
+	SearchParams_t searchParams1 = {
+		0,
+		(user.frames >> 1),
+		user.seed,
+		&user,
+		&ogwild,
+		w_version,
+		w_language,
+		grouped_version,
+		alternate_form,
+		0,
+		NULL,
+		0,
+	};
+	pthread_t thread1;
+	pthread_create(&thread1, NULL, Search, &searchParams1);
 
-		if (frame != 0) { RngNext(&seed); } //advance the RNG everytime, except on the 0th frame
+	SearchParams_t searchParams2 = {
+		(user.frames >> 1),
+		user.frames,
+		RngAdvanceN(&user.seed, (user.frames >> 1)),
+		&user,
+		&ogwild,
+		w_version,
+		w_language,
+		grouped_version,
+		alternate_form,
+		0,
+		NULL,
+		0,
+	};
+	pthread_t thread2;
+	pthread_create(&thread2, NULL, Search, &searchParams2);
 
-		Pkmn wild = { 0 }; //0 init
-		Pkmn seven = { 0 }; //0 init
+	pthread_join(thread1, NULL);
+	pthread_join(thread2, NULL);
 
-		MethodJSeedToPID(seed, &wild);
+	fwrite(searchParams1.retBuf, sizeof (char), searchParams1.retSz, fp);
+	fwrite(searchParams2.retBuf, sizeof (char), searchParams2.retSz, fp);
 
-		/* Checking for duplicate PIDs if user specified it */
-		if (user.dupe == 0) {
-			bool duplicate = false;
-			for (u16 i = 0; i < PIDS_MAX; i++) {
-				if (pid_list[i] == wild.pid) {
-					duplicate = true;
-					break;
-				}
-				else if (pid_list[i] == 0) {
-					pid_list[i] = wild.pid; //insert the new pid
-					break;
-				}
-			}
-			if (frame % PIDS_MAX == PIDS_MAX - 1) { memset(pid_list, 0, sizeof(pid_list)); } //if filled, zero it out
-			if (duplicate) { continue; }
-		}
+	free(searchParams1.retBuf);
+	free(searchParams2.retBuf);
 
-		SetBlocks(&wild);
+	results = searchParams1.results + searchParams2.results;
 
-		/* Block A */
-		wild.data[wild.pos_a][0] = ogwild.species; //species
-		wild.data[wild.pos_a][1] = ogwild.item; //held item
-		wild.data[wild.pos_a][2] = user.tid; //tid
-		wild.data[wild.pos_a][3] = user.sid; //sid
-		wild.data[wild.pos_a][4] = ogwild.xp1; //xp1
-		wild.data[wild.pos_a][5] = ogwild.xp2; //xp2
-		wild.data[wild.pos_a][6] = ogwild.frab; //ability and friendship concatenated
-		wild.data[wild.pos_a][7] = w_language; //language
-		/* Block B */
-		for (u8 i = 0; i < OWN_MOVES_MAX; i++) { wild.data[wild.pos_b][i] = ogwild.moves[i]; }//4 moves
-		wild.data[wild.pos_b][4] = ogwild.pp1and2; //pp1and2
-		wild.data[wild.pos_b][5] = ogwild.pp3and4; //pp3and4
-		wild.data[wild.pos_b][8] = wild.iv1;
-		wild.data[wild.pos_b][9] = wild.iv2;
-		wild.data[wild.pos_b][12] = 0x0004 | alternate_form; //0x0004 for genderless
-		/* Block C */
-		for (u8 i = 0; i < 11; i++) { wild.data[wild.pos_c][i] = ogwild.name[i]; } //11 characters for the name
-		wild.data[wild.pos_c][11] = w_version; //version
-		/* Block D */
-		wild.data[wild.pos_d][13] = 0x0400; //pokeball
-		wild.data[wild.pos_d][14] = ogwild.level; //level
-		/* Condition data */
-		wild.cond[2] = ogwild.level; //level again
-		wild.cond[3] = IvToStat_HP(&wild, &ogwild);
-		wild.cond[4] = wild.cond[3]; //current hp = max hp
-		wild.cond[5] = IvToStat(&wild, &ogwild, at);
-		wild.cond[6] = IvToStat(&wild, &ogwild, df);
-		wild.cond[7] = IvToStat(&wild, &ogwild, sp);
-		wild.cond[8] = IvToStat(&wild, &ogwild, sa);
-		wild.cond[9] = IvToStat(&wild, &ogwild, sd);
-		// wild.cond[10] = 0;
-		// wild.cond[11] = 0;
-		wild.cond[12] = w_language; //language again
-		wild.cond[13] = 0xff00 | (w_version >> 8); //version variation
-		for (u8 i = 14; i < 25; i++) { wild.cond[i] = 0xffff; } //14 to 24 = 0xffff
-		// wild.cond[25] = 0;
-		wild.cond[26] = 0xffff;
-		// wild.cond[27] = 0;
-		wild.cond[28] = 0xffff;
-		wild.cond[29] = 0xffff;
-
-		SetCheckum(&wild);
-		EncryptBlocks(&wild);
-		EncryptCondition(&wild);
-
-		/* Initialize Seven */
-		seven.pid = 0x00005544;
-		seven.bef = 0x05a4; //after checksum check, changed to a Bad Egg (bit 4: 0->1)
-		SetBlocks(&seven); //always ACBD (0x0213)
-
-		/* Simulate the buffer overflow */
-		/* Block A */
-		seven.data[seven.pos_a][0] = (user.aslr + OppPartyOffBeg[grouped_version]) & 0xffff;
-		seven.data[seven.pos_a][1] = (user.aslr + OppPartyOffBeg[grouped_version]) >> 16;
-		seven.data[seven.pos_a][2] = (user.aslr + OppPartyOffEnd[grouped_version]) & 0xffff;
-		seven.data[seven.pos_a][3] = (user.aslr + OppPartyOffEnd[grouped_version]) >> 16;
-		for (u8 i = 0; i < 8; i++) { seven.data[seven.pos_a][i + 4] = ogwild.gfx[i]; }
-		seven.data[seven.pos_a][12] = 0x0006;
-		seven.data[seven.pos_a][13] = 0x0000;
-		seven.data[seven.pos_a][14] = 0x0001;
-		seven.data[seven.pos_a][15] = 0x0000;
-		/* Block C, B, D and Condition data - array out of bounds method */
-		u16* wild_data = (u16*)(&wild.pid);
-		u16* seven_data = (u16*)(&seven.data[1]);
-		for (u8 i = 0; i < (BLOCKS - 1) * BLOCK_SIZE + COND_SIZE_S + STACK_OFFSET; i++) { seven_data[i] = wild_data[i]; }
-
-		EncryptBlocks(&seven);
-
-		/* If the 1st move of Seven is invalid, the game will crash right before showing the battle menu */
-		if (seven.data[seven.pos_b][0] > MOVES_MAX + 2) { continue; }
-
-		/* If the ball doesn't have a valid ID the battle won't load */
-		u8 ballid = seven.data[seven.pos_d][13] >> 8;
-		if (ballid > BALL_ID_MAX) { continue; }
-
-		SetCheckum(&seven);
-		EncryptBlocks(&seven);
-
-		/* If heap ID of Opponent 1 Party is valid, the game will crash when returning to the overworld */
-		u8 heapid = seven.data[seven.pos_a][10] & 0xff;
-		if (heapid < HEAPID_MAX) { continue; }
-
-		/* If partycount of Opponent 1 Party is invalid, the game will crash right before showing the battle menu */
-		u32 partycount = seven.data[seven.pos_a][14] | (seven.data[seven.pos_a][15] << 16);
-		if (IsInvalidPartyCount(partycount)) { continue; }
-
-		/* If the Bad Egg flag is set or the Fast Mode flags aren't set, the Pkmn will become a Bad Egg */
-		if ((seven.data[seven.pos_c][2] & 7) != 3) { continue; }
-
-		/* Get the new PID of the wild and deduce its new block order */
-		wild.pid = seven.data[seven.pos_c][0] | (seven.data[seven.pos_c][1] << 16);
-		SetBlocks(&wild);
-
-		/* Get final species, item, ability and steps to hatch - array out of bounds method */
-		u16 f_species = seven.data[1 + wild.pos_a][STACK_OFFSET];
-		u16 f_item = seven.data[1 + wild.pos_a][STACK_OFFSET + 1];
-		u16 f_steps = seven.data[1 + wild.pos_a][STACK_OFFSET + 6] & 0xff;
-		u8 f_ability = seven.data[1 + wild.pos_a][STACK_OFFSET + 6] >> 8;
-
-		/* Valid species, user-defined species and user-defined item filters */
-		if (f_species >= SPECIES_MAX) { continue; }
-		if (user.species != 0 && f_species != user.species) { continue; }
-		if (user.item != 0 && f_item != user.item) { continue; }
-
-		/* Get final moveset, IVs, Egg steps, Form ID and Fateful Encounter flag - array out of bounds method */
-		u16 moves[OWN_MOVES_MAX];
-		for (u8 i = 0; i < OWN_MOVES_MAX; i++) { moves[i] = seven.data[1 + wild.pos_b][STACK_OFFSET + i]; }
-		wild.iv1 = seven.data[1 + wild.pos_b][STACK_OFFSET + 8];
-		wild.iv2 = seven.data[1 + wild.pos_b][STACK_OFFSET + 9];
-		u16 fate = seven.data[3 + wild.pos_b][0]; //if (wild.pos_b==3) then fate = seven.cond[COND_SIZE_S-1]
-		
-		/* Move filter */
-		if (user.move != 0) {
-			/* If none of the 4 current ones match the user's move, continue search */
-			if ((moves[0] != user.move) && (moves[1] != user.move) && (moves[2] != user.move) && (moves[3] != user.move)) { continue; }
-		}
-
-		/* IVs, steps to hatch, level, form ID */
-		GetIVs(&wild);
-		f_steps = IsEgg(wild.iv2) * (f_steps + 1) * 255; //steps to hatch if Egg, else zero (0)
-		u8 f_level = seven.cond[22] & 0xff;
-		u8 form = GetFormId((u8)fate);
-
-		/* Strings for a succesful result */
-		u8* str_fateful;
-		if (IsFatefulEncounter(fate)) { str_fateful = "Fateful"; }
-		else { str_fateful = "-------"; }
-		u8* str_shiny;
-		if (IsShiny(wild.pid, user.tid, user.sid)) { str_shiny = "Shiny"; }
-		else { str_shiny = "-----"; }
-		u8 str_f_species[STRING_LENGTH_MAX];
-		SetString(str_f_species, f_species, Pokelist, SPECIES_MAX, "DPbox", "0x%04X");
-		u8 str_f_item[STRING_LENGTH_MAX];
-		SetString(str_f_item, f_item, Items, ITEMS_MAX, "None", "0x%04X");
-		u8 str_f_abi[STRING_LENGTH_MAX];
-		SetString(str_f_abi, f_ability, Abilities, ABILITIES_MAX, "None", "0x%02X");
-		u8 str_moves[OWN_MOVES_MAX][STRING_LENGTH_MAX];
-		for (u8 i = 0; i < OWN_MOVES_MAX; i++) { SetString(str_moves[i], moves[i], Moves, MOVES_MAX, "None", "0x%04X"); }
-
-#ifdef DEBUG
-		/* Print successful result to console */
-		printf("0x%08X | 0x%08X | Lv. %-3d | %-12s | %-4d | %-14s | %-16s | %-5d steps | %s | %s | ", seed, wild.pid, f_level, str_f_species, form, str_f_item, str_f_abi, f_steps, str_fateful, str_shiny);
-		printf("%02d/%02d/%02d/%02d/%02d/%02d | ", wild.ivs[hp], wild.ivs[at], wild.ivs[df], wild.ivs[sa], wild.ivs[sd], wild.ivs[sp]);
-		printf("%s, %s, %s, %s\n", str_moves[0], str_moves[1], str_moves[2], str_moves[3]);
-#endif
-		/* Print successful result to file */
-		fprintf(fp, "0x%08X | 0x%08X | Lv. %-3d | %-12s | %-4d | %-14s | %-16s | %-5d steps | %s | %s | ", seed, wild.pid, f_level, str_f_species, form, str_f_item, str_f_abi, f_steps, str_fateful, str_shiny);
-		fprintf(fp, "%02d/%02d/%02d/%02d/%02d/%02d | ", wild.ivs[hp], wild.ivs[at], wild.ivs[df], wild.ivs[sa], wild.ivs[sd], wild.ivs[sp]);
-		fprintf(fp, "%s, %s, %s, %s\n", str_moves[0], str_moves[1], str_moves[2], str_moves[3]);
-
-		results++;
-	}
-
-	/* End of search loop */
 	clock_t end = clock(); //end timer
 	double time_spent = ((double)end - (double)begin) / CLOCKS_PER_SEC; //calculate time elapsed since start of search
 	fprintf(fp, "\nFound %u results in %.2f seconds.\n", results, time_spent); //print time to file
