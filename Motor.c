@@ -365,7 +365,8 @@ static void* Search(void* arg) {
 		for (u8 i = 0; i < OWN_MOVES_MAX; i++) { moves[i] = seven.data[1 + wild.pos_b][STACK_OFFSET + i]; }
 		wild.iv1 = seven.data[1 + wild.pos_b][STACK_OFFSET + 8];
 		wild.iv2 = seven.data[1 + wild.pos_b][STACK_OFFSET + 9];
-		u16 fate = seven.data[3 + wild.pos_b][0]; //if (wild.pos_b==3) then fate = seven.cond[COND_SIZE_S-1]
+
+		u16 fate = seven.data[2 + wild.pos_b][0];
 		
 		/* Move filter */
 		if (searchParams->user->move != 0) {
@@ -537,7 +538,7 @@ int main() {
 
 	SearchParams_t searchParams1 = {
 		0,
-		(user.frames >> 1),
+		(user.frames >> 2),
 		user.seed,
 		&user,
 		&ogwild,
@@ -553,9 +554,9 @@ int main() {
 	pthread_create(&thread1, NULL, Search, &searchParams1);
 
 	SearchParams_t searchParams2 = {
+		(user.frames >> 2),
 		(user.frames >> 1),
-		user.frames,
-		RngAdvanceN(&user.seed, (user.frames >> 1)),
+		RngAdvanceN(&user.seed, (user.frames >> 2)),
 		&user,
 		&ogwild,
 		w_version,
@@ -569,16 +570,56 @@ int main() {
 	pthread_t thread2;
 	pthread_create(&thread2, NULL, Search, &searchParams2);
 
+	SearchParams_t searchParams3 = {
+		(user.frames >> 1),
+		(user.frames >> 1) + (user.frames >> 2),
+		RngAdvanceN(&user.seed, (user.frames >> 1)),
+		&user,
+		&ogwild,
+		w_version,
+		w_language,
+		grouped_version,
+		alternate_form,
+		0,
+		NULL,
+		0,
+	};
+	pthread_t thread3;
+	pthread_create(&thread3, NULL, Search, &searchParams3);
+
+	SearchParams_t searchParams4 = {
+		(user.frames >> 1) + (user.frames >> 2),
+		user.frames,
+		RngAdvanceN(&user.seed, (user.frames >> 1) + (user.frames >> 2)),
+		&user,
+		&ogwild,
+		w_version,
+		w_language,
+		grouped_version,
+		alternate_form,
+		0,
+		NULL,
+		0,
+	};
+	pthread_t thread4;
+	pthread_create(&thread4, NULL, Search, &searchParams4);
+
 	pthread_join(thread1, NULL);
 	pthread_join(thread2, NULL);
+	pthread_join(thread3, NULL);
+	pthread_join(thread4, NULL);
 
 	fwrite(searchParams1.retBuf, sizeof (char), searchParams1.retSz, fp);
 	fwrite(searchParams2.retBuf, sizeof (char), searchParams2.retSz, fp);
+	fwrite(searchParams3.retBuf, sizeof (char), searchParams2.retSz, fp);
+	fwrite(searchParams4.retBuf, sizeof (char), searchParams2.retSz, fp);
 
 	free(searchParams1.retBuf);
 	free(searchParams2.retBuf);
+	free(searchParams3.retBuf);
+	free(searchParams4.retBuf);
 
-	results = searchParams1.results + searchParams2.results;
+	results = searchParams1.results + searchParams2.results + searchParams3.results + searchParams4.results;
 
 	clock_t end = clock(); //end timer
 	double time_spent = ((double)end - (double)begin) / CLOCKS_PER_SEC; //calculate time elapsed since start of search
