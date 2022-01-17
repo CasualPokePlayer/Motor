@@ -611,8 +611,8 @@ int main() {
 
 	fwrite(searchParams1.retBuf, sizeof (char), searchParams1.retSz, fp);
 	fwrite(searchParams2.retBuf, sizeof (char), searchParams2.retSz, fp);
-	fwrite(searchParams3.retBuf, sizeof (char), searchParams2.retSz, fp);
-	fwrite(searchParams4.retBuf, sizeof (char), searchParams2.retSz, fp);
+	fwrite(searchParams3.retBuf, sizeof (char), searchParams3.retSz, fp);
+	fwrite(searchParams4.retBuf, sizeof (char), searchParams4.retSz, fp);
 
 	free(searchParams1.retBuf);
 	free(searchParams2.retBuf);
