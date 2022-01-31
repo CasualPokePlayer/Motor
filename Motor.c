@@ -220,6 +220,8 @@ typedef struct {
 	size_t retSz;
 } SearchParams_t;
 
+pthread_mutex_t sprintf_mutex;
+
 /* Main search loop */
 static void* Search(void* arg) {
 	size_t bufSz = 100000; // 100 KB, expand if needed
@@ -409,9 +411,11 @@ static void* Search(void* arg) {
 		}
 
 		/* Print successful result to buffer */
+		pthread_mutex_lock(&sprintf_mutex);
 		buf += sprintf(buf, "0x%08X | 0x%08X | Lv. %-3d | %-12s | %-4d | %-14s | %-16s | %-5d steps | %s | %s | ", searchParams->seed, wild.pid, f_level, str_f_species, form, str_f_item, str_f_abi, f_steps, str_fateful, str_shiny);
 		buf += sprintf(buf, "%02d/%02d/%02d/%02d/%02d/%02d | ", wild.ivs[hp], wild.ivs[at], wild.ivs[df], wild.ivs[sa], wild.ivs[sd], wild.ivs[sp]);
 		buf += sprintf(buf, "%s, %s, %s, %s\n", str_moves[0], str_moves[1], str_moves[2], str_moves[3]);
+		pthread_mutex_unlock(&sprintf_mutex);
 
 		++searchParams->results;
 	}
